@@ -113,18 +113,15 @@
   .sync-dot{position:fixed; top:calc(10px + var(--safe-top)); right:14px; width:8px; height:8px; border-radius:50%; background:var(--herb-light); z-index:60; transition:background .3s;}
   .sync-dot.offline{background:var(--danger);}
 
-  /* Lock screen */
-  .lock-overlay{position:fixed; inset:0; background:var(--bg); z-index:100; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:20px;}
-  .lock-brand{font-family:'Fraunces',serif; font-weight:600; font-style:italic; font-size:26px; color:var(--herb); margin-bottom:28px;}
-  .lock-dots{display:flex; gap:14px; margin-bottom:26px;}
-  .lock-dot{width:16px; height:16px; border-radius:50%; border:1.5px solid var(--herb-light); background:transparent; transition:.15s;}
-  .lock-dot.filled{background:var(--herb); border-color:var(--herb);}
-  .lock-dot.err{border-color:var(--danger); background:var(--danger);}
-  .lock-keypad{display:grid; grid-template-columns:repeat(3,64px); gap:14px; justify-content:center;}
-  .lock-key{width:64px; height:64px; border-radius:50%; border:1px solid var(--line); background:var(--card); font-family:'Figtree',sans-serif; font-size:22px; font-weight:600; color:var(--ink); cursor:pointer; display:flex; align-items:center; justify-content:center;}
-  .lock-key:active{background:var(--herb-pale);}
-  .lock-key.wide{background:transparent; border:none; font-size:15px; color:var(--muted); font-weight:500;}
-  .lock-error{color:var(--danger); font-size:13px; margin-top:14px; min-height:16px;}
+  /* Login screen */
+  .lock-overlay{position:fixed; inset:0; background:var(--bg); z-index:100; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:24px;}
+  .lock-brand{font-family:'Fraunces',serif; font-weight:600; font-style:italic; font-size:28px; color:var(--herb); margin-bottom:6px;}
+  .lock-sub{font-size:13.5px; color:var(--muted); margin-bottom:26px; text-align:center;}
+  .login-box{width:100%; max-width:320px;}
+  .login-box .field-label{margin-top:12px;}
+  .login-btn{width:100%; margin-top:20px; padding:14px; border-radius:12px; border:none; background:var(--herb); color:#fff; font-family:'Figtree',sans-serif; font-weight:600; font-size:15px; cursor:pointer;}
+  .login-btn:disabled{opacity:.6;}
+  .lock-error{color:var(--danger); font-size:13px; margin-top:14px; min-height:16px; text-align:center; line-height:1.4;}
 
   /* Toast */
   .toast{position:fixed; left:50%; transform:translateX(-50%) translateY(20px); bottom:calc(30px + var(--safe-bottom)); background:var(--ink); color:#fff; padding:11px 18px; border-radius:22px; font-size:14px; font-weight:500; z-index:120; opacity:0; pointer-events:none; transition:opacity .2s, transform .2s; max-width:88%; text-align:center;}
@@ -147,24 +144,15 @@
 
 <div class="lock-overlay" id="lockOverlay">
   <div class="lock-brand">Essensplan<span style="color:var(--butter);">.</span></div>
-  <div class="lock-dots" id="lockDots">
-    <div class="lock-dot"></div><div class="lock-dot"></div><div class="lock-dot"></div><div class="lock-dot"></div>
+  <div class="lock-sub">Mit dem Konto anmelden,<br>das ihr auch für die Einkaufsliste nutzt</div>
+  <div class="login-box">
+    <div class="field-label">E-Mail</div>
+    <input type="email" class="field-input" id="loginEmail" autocomplete="username" inputmode="email" autocapitalize="none" spellcheck="false" placeholder="name@beispiel.de">
+    <div class="field-label">Passwort</div>
+    <input type="password" class="field-input" id="loginPass" autocomplete="current-password" placeholder="••••••••">
+    <button class="login-btn" id="loginBtn">Anmelden</button>
+    <div class="lock-error" id="lockError"></div>
   </div>
-  <div class="lock-keypad" id="lockKeypad">
-    <button class="lock-key" data-k="1">1</button>
-    <button class="lock-key" data-k="2">2</button>
-    <button class="lock-key" data-k="3">3</button>
-    <button class="lock-key" data-k="4">4</button>
-    <button class="lock-key" data-k="5">5</button>
-    <button class="lock-key" data-k="6">6</button>
-    <button class="lock-key" data-k="7">7</button>
-    <button class="lock-key" data-k="8">8</button>
-    <button class="lock-key" data-k="9">9</button>
-    <div></div>
-    <button class="lock-key" data-k="0">0</button>
-    <button class="lock-key wide" data-k="del">⌫</button>
-  </div>
-  <div class="lock-error" id="lockError"></div>
 </div>
 
 <div class="sync-dot" id="syncDot"></div>
@@ -259,50 +247,10 @@
 
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged, setPersistence, browserLocalPersistence } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import { getDatabase, ref as dbRef, onValue, set as dbSet, remove as dbRemove, push as dbPush } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
 
 (function(){
-  // ---------- PIN lock ----------
-  const PIN = '1706';
-  const LOCK_KEY = 'essensplan_unlocked_v1';
-  const lockOverlay = document.getElementById('lockOverlay');
-  const lockDots = document.getElementById('lockDots').children;
-  const lockError = document.getElementById('lockError');
-  let entered = '';
-
-  function refreshDots(err){
-    for(let i=0;i<4;i++){
-      lockDots[i].className = 'lock-dot' + (i<entered.length ? (err?' err':' filled') : '');
-    }
-  }
-  function unlock(){
-    lockOverlay.style.display = 'none';
-    try{ localStorage.setItem(LOCK_KEY, '1'); }catch(e){}
-  }
-  document.getElementById('lockKeypad').addEventListener('click', e=>{
-    const btn = e.target.closest('.lock-key');
-    if(!btn) return;
-    const k = btn.getAttribute('data-k');
-    if(k==='del'){ entered = entered.slice(0,-1); lockError.textContent=''; refreshDots(false); return; }
-    if(entered.length>=4) return;
-    entered += k;
-    refreshDots(false);
-    if(entered.length===4){
-      setTimeout(()=>{
-        if(entered===PIN){ unlock(); }
-        else{
-          lockError.textContent = 'Falscher PIN';
-          refreshDots(true);
-          setTimeout(()=>{ entered=''; refreshDots(false); }, 400);
-        }
-      }, 120);
-    }
-  });
-  try{
-    if(localStorage.getItem(LOCK_KEY)==='1'){ lockOverlay.style.display='none'; }
-  }catch(e){}
-
   const ROOT = 'essensplan';
 
   const firebaseConfig = {
@@ -368,9 +316,9 @@ import { getDatabase, ref as dbRef, onValue, set as dbSet, remove as dbRemove, p
     if(ok) lastError = '';
   }
   syncDot.addEventListener('click', ()=>{
-    alert(lastError
-      ? 'Sync-Problem:\n\n' + lastError
-      : 'Verbindung zu Firebase steht.');
+    if(lastError){ alert('Sync-Problem:\n\n' + lastError); return; }
+    const who = fbAuth.currentUser ? fbAuth.currentUser.email : 'unbekannt';
+    if(confirm('Verbindung steht.\nAngemeldet als: ' + who + '\n\nAbmelden?')) doLogout();
   });
   syncDot.style.cursor = 'pointer';
   syncDot.style.padding = '10px';
@@ -388,17 +336,65 @@ import { getDatabase, ref as dbRef, onValue, set as dbSet, remove as dbRemove, p
     toastTimer = setTimeout(()=>toastEl.classList.remove('show'), isError ? 6000 : 1800);
   }
 
+  const lockOverlay = document.getElementById('lockOverlay');
+  const loginEmail = document.getElementById('loginEmail');
+  const loginPass = document.getElementById('loginPass');
+  const loginBtn = document.getElementById('loginBtn');
+  const lockError = document.getElementById('lockError');
+  let listenerAttached = false;
+
+  function authErrorText(code){
+    switch(code){
+      case 'auth/invalid-email': return 'Die E-Mail-Adresse sieht nicht richtig aus.';
+      case 'auth/user-not-found': return 'Zu dieser E-Mail gibt es kein Konto.';
+      case 'auth/wrong-password':
+      case 'auth/invalid-credential': return 'E-Mail oder Passwort stimmt nicht.';
+      case 'auth/too-many-requests': return 'Zu viele Versuche. Bitte kurz warten.';
+      case 'auth/network-request-failed': return 'Keine Verbindung. Internet prüfen.';
+      default: return 'Anmeldung fehlgeschlagen (' + code + ').';
+    }
+  }
+
   function startSync(){
-    // Anonyme Anmeldung – erfüllt die Firebase-Regel "auth != null"
+    // Angemeldet bleiben, bis man sich abmeldet
+    setPersistence(fbAuth, browserLocalPersistence).catch(()=>{});
+
     onAuthStateChanged(fbAuth, user=>{
       if(user){
         authReady = true;
-        attachListener();
+        lockOverlay.style.display = 'none';
+        if(!listenerAttached){ listenerAttached = true; attachListener(); }
+      }else{
+        authReady = false;
+        lockOverlay.style.display = 'flex';
       }
     });
-    signInAnonymously(fbAuth).catch(err=>{
-      setOnline(false, 'Anmeldung fehlgeschlagen.\n' + err.code + '\n' + err.message +
-        '\n\nTipp: In der Firebase Console unter Authentication > Sign-in method muss "Anonym" aktiviert sein.');
+  }
+
+  function doLogin(){
+    const email = loginEmail.value.trim();
+    const pass = loginPass.value;
+    if(!email || !pass){ lockError.textContent = 'Bitte E-Mail und Passwort eingeben.'; return; }
+    lockError.textContent = '';
+    loginBtn.disabled = true;
+    loginBtn.textContent = 'Anmelden…';
+    signInWithEmailAndPassword(fbAuth, email, pass)
+      .then(()=>{ loginPass.value = ''; })
+      .catch(err=>{ lockError.textContent = authErrorText(err.code); })
+      .finally(()=>{ loginBtn.disabled = false; loginBtn.textContent = 'Anmelden'; });
+  }
+
+  loginBtn.addEventListener('click', doLogin);
+  loginPass.addEventListener('keydown', e=>{ if(e.key==='Enter') doLogin(); });
+  loginEmail.addEventListener('keydown', e=>{ if(e.key==='Enter') loginPass.focus(); });
+
+  function doLogout(){
+    signOut(fbAuth).then(()=>{
+      listenerAttached = false;
+      state = {days:{}, ideas:{}};
+      renderAll();
+      loginPass.value = '';
+      lockOverlay.style.display = 'flex';
     });
   }
 
