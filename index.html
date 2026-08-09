@@ -240,7 +240,11 @@
   </div>
 </div>
 
-<script>
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import { getDatabase, ref as dbRef, onValue, set as dbSet, remove as dbRemove, push as dbPush } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+
 (function(){
   // ---------- PIN lock ----------
   const PIN = '1706';
@@ -282,8 +286,22 @@
     if(localStorage.getItem(LOCK_KEY)==='1'){ lockOverlay.style.display='none'; }
   }catch(e){}
 
-  const BASE = 'https://einkaufsliste-die-suehsen-default-rtdb.europe-west1.firebasedatabase.app';
   const ROOT = 'essensplan';
+
+  const firebaseConfig = {
+    apiKey: "AIzaSyCVVXXPsxB-QUGQhDqZnkFIyPiAORyFPyE",
+    authDomain: "einkaufsliste-die-suehsen.firebaseapp.com",
+    databaseURL: "https://einkaufsliste-die-suehsen-default-rtdb.europe-west1.firebasedatabase.app",
+    projectId: "einkaufsliste-die-suehsen",
+    storageBucket: "einkaufsliste-die-suehsen.firebasestorage.app",
+    messagingSenderId: "872606696030",
+    appId: "1:872606696030:web:24673a3459ffc61d976acf"
+  };
+
+  const fbApp = initializeApp(firebaseConfig);
+  const fbAuth = getAuth(fbApp);
+  const fbDb = getDatabase(fbApp);
+  let authReady = false;
 
   const SLOTS = [
     {key:'morgens', label:'M', full:'Morgens'},
@@ -326,81 +344,89 @@
 
   // ---------- Firebase REST sync ----------
   const syncDot = document.getElementById('syncDot');
-  function setOnline(ok){ syncDot.classList.toggle('offline', !ok); }
+  let lastError = '';
+  function setOnline(ok, msg){
+    syncDot.classList.toggle('offline', !ok);
+    if(!ok && msg) lastError = msg;
+    if(ok) lastError = '';
+  }
+  syncDot.addEventListener('click', ()=>{
+    alert(lastError
+      ? 'Sync-Problem:\n\n' + lastError
+      : 'Verbindung zu Firebase steht.');
+  });
+  syncDot.style.cursor = 'pointer';
+  syncDot.style.padding = '10px';
+  syncDot.style.boxSizing = 'content-box';
+  syncDot.style.backgroundClip = 'content-box';
+  syncDot.style.margin = '-10px';
 
-  function loadInitial(){
-    fetch(`${BASE}/${ROOT}.json`).then(r=>r.json()).then(data=>{
-      state = data || {days:{}, ideas:{}};
-      state.days = state.days || {};
-      state.ideas = state.ideas || {};
+  function startSync(){
+    // Anonyme Anmeldung – erfüllt die Firebase-Regel "auth != null"
+    onAuthStateChanged(fbAuth, user=>{
+      if(user){
+        authReady = true;
+        attachListener();
+      }
+    });
+    signInAnonymously(fbAuth).catch(err=>{
+      setOnline(false, 'Anmeldung fehlgeschlagen.\n' + err.code + '\n' + err.message +
+        '\n\nTipp: In der Firebase Console unter Authentication > Sign-in method muss "Anonym" aktiviert sein.');
+    });
+  }
+
+  function attachListener(){
+    const rootRef = dbRef(fbDb, ROOT);
+    onValue(rootRef, snap=>{
+      const data = snap.val() || {};
+      state = {
+        days: data.days || {},
+        ideas: data.ideas || {}
+      };
       setOnline(true);
       renderAll();
-    }).catch(()=>{ setOnline(false); renderAll(); });
+    }, err=>{
+      setOnline(false, 'Lesen fehlgeschlagen.\n' + err.code + '\n' + err.message);
+    });
   }
 
-  function applyPatch(path, data){
-    // path like "/" or "/days/2026-08-10" or "/ideas/-Nabc"
-    if(path === '/' || path === ''){
-      state = data || {days:{}, ideas:{}};
-      state.days = state.days || {};
-      state.ideas = state.ideas || {};
-      return;
+  function requireAuth(){
+    if(!authReady){
+      setOnline(false, 'Noch nicht angemeldet – bitte kurz warten und erneut versuchen.');
+      return false;
     }
-    const parts = path.split('/').filter(Boolean);
-    let ref = state;
-    for(let i=0;i<parts.length-1;i++){
-      const p = parts[i];
-      if(!ref[p] || typeof ref[p] !== 'object') ref[p] = {};
-      ref = ref[p];
-    }
-    const last = parts[parts.length-1];
-    if(data === null){ delete ref[last]; }
-    else { ref[last] = data; }
-  }
-
-  function startStream(){
-    try{
-      const es = new EventSource(`${BASE}/${ROOT}.json`);
-      es.addEventListener('put', e=>{
-        setOnline(true);
-        try{
-          const {path, data} = JSON.parse(e.data);
-          applyPatch(path, data);
-          renderAll();
-        }catch(err){}
-      });
-      es.addEventListener('patch', e=>{
-        setOnline(true);
-        try{
-          const {path, data} = JSON.parse(e.data);
-          if(data && typeof data === 'object'){
-            Object.keys(data).forEach(k=>applyPatch(path.replace(/\/$/,'')+'/'+k, data[k]));
-          }
-          renderAll();
-        }catch(err){}
-      });
-      es.onerror = ()=>{ setOnline(false); };
-      es.onopen = ()=>{ setOnline(true); };
-    }catch(err){ setOnline(false); }
+    return true;
   }
 
   function putDay(dateKey, dayObj){
-    setOnline(true);
+    if(!requireAuth()) return;
     const hasAny = dayObj.morgens || dayObj.mittags || dayObj.abends;
-    const url = `${BASE}/${ROOT}/days/${dateKey}.json`;
-    fetch(url, {method: hasAny? 'PUT':'DELETE', body: hasAny? JSON.stringify(dayObj): undefined})
-      .catch(()=>setOnline(false));
+    const target = dbRef(fbDb, ROOT + '/days/' + dateKey);
+    const op = hasAny ? dbSet(target, dayObj) : dbRemove(target);
+    op.then(()=>setOnline(true))
+      .catch(err=>setOnline(false, 'Tag speichern fehlgeschlagen.\n' + err.code + '\n' + err.message));
   }
 
   function putIdea(id, ideaObj){
-    fetch(`${BASE}/${ROOT}/ideas/${id}.json`, {method:'PUT', body:JSON.stringify(ideaObj)}).catch(()=>setOnline(false));
+    if(!requireAuth()) return;
+    dbSet(dbRef(fbDb, ROOT + '/ideas/' + id), ideaObj)
+      .then(()=>setOnline(true))
+      .catch(err=>setOnline(false, 'Idee speichern fehlgeschlagen.\n' + err.code + '\n' + err.message));
   }
+
   function deleteIdea(id){
-    fetch(`${BASE}/${ROOT}/ideas/${id}.json`, {method:'DELETE'}).catch(()=>setOnline(false));
+    if(!requireAuth()) return;
+    dbRemove(dbRef(fbDb, ROOT + '/ideas/' + id))
+      .then(()=>setOnline(true))
+      .catch(err=>setOnline(false, 'Idee löschen fehlgeschlagen.\n' + err.code + '\n' + err.message));
   }
+
   function pushIdea(ideaObj){
-    return fetch(`${BASE}/${ROOT}/ideas.json`, {method:'POST', body:JSON.stringify(ideaObj)})
-      .then(r=>r.json()).then(res=>res.name).catch(()=>{ setOnline(false); return null; });
+    if(!requireAuth()) return Promise.resolve(null);
+    const newRef = dbPush(dbRef(fbDb, ROOT + '/ideas'));
+    return dbSet(newRef, ideaObj)
+      .then(()=>{ setOnline(true); return newRef.key; })
+      .catch(err=>{ setOnline(false, 'Idee anlegen fehlgeschlagen.\n' + err.code + '\n' + err.message); return null; });
   }
 
   // ---------- rendering ----------
@@ -666,8 +692,8 @@
   document.getElementById('ideaSearch').addEventListener('input', renderIdeas);
 
   // ---------- init ----------
-  loadInitial();
-  startStream();
+  renderAll();
+  startSync();
 })();
 </script>
 </body>
