@@ -110,9 +110,45 @@
   .divider-or{text-align:center; font-size:11.5px; color:var(--muted); margin:16px 0 4px; text-transform:uppercase; letter-spacing:.08em; position:relative;}
   .sync-dot{position:fixed; top:calc(10px + var(--safe-top)); right:14px; width:8px; height:8px; border-radius:50%; background:var(--herb-light); z-index:60; transition:background .3s;}
   .sync-dot.offline{background:var(--danger);}
+
+  /* Lock screen */
+  .lock-overlay{position:fixed; inset:0; background:var(--bg); z-index:100; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:20px;}
+  .lock-brand{font-family:'Fraunces',serif; font-weight:600; font-style:italic; font-size:26px; color:var(--herb); margin-bottom:28px;}
+  .lock-dots{display:flex; gap:14px; margin-bottom:26px;}
+  .lock-dot{width:16px; height:16px; border-radius:50%; border:1.5px solid var(--herb-light); background:transparent; transition:.15s;}
+  .lock-dot.filled{background:var(--herb); border-color:var(--herb);}
+  .lock-dot.err{border-color:var(--danger); background:var(--danger);}
+  .lock-keypad{display:grid; grid-template-columns:repeat(3,64px); gap:14px; justify-content:center;}
+  .lock-key{width:64px; height:64px; border-radius:50%; border:1px solid var(--line); background:var(--card); font-family:'Figtree',sans-serif; font-size:22px; font-weight:600; color:var(--ink); cursor:pointer; display:flex; align-items:center; justify-content:center;}
+  .lock-key:active{background:var(--herb-pale);}
+  .lock-key.wide{background:transparent; border:none; font-size:15px; color:var(--muted); font-weight:500;}
+  .lock-error{color:var(--danger); font-size:13px; margin-top:14px; min-height:16px;}
 </style>
 </head>
 <body>
+
+<div class="lock-overlay" id="lockOverlay">
+  <div class="lock-brand">Essensplan<span style="color:var(--butter);">.</span></div>
+  <div class="lock-dots" id="lockDots">
+    <div class="lock-dot"></div><div class="lock-dot"></div><div class="lock-dot"></div><div class="lock-dot"></div>
+  </div>
+  <div class="lock-keypad" id="lockKeypad">
+    <button class="lock-key" data-k="1">1</button>
+    <button class="lock-key" data-k="2">2</button>
+    <button class="lock-key" data-k="3">3</button>
+    <button class="lock-key" data-k="4">4</button>
+    <button class="lock-key" data-k="5">5</button>
+    <button class="lock-key" data-k="6">6</button>
+    <button class="lock-key" data-k="7">7</button>
+    <button class="lock-key" data-k="8">8</button>
+    <button class="lock-key" data-k="9">9</button>
+    <div></div>
+    <button class="lock-key" data-k="0">0</button>
+    <button class="lock-key wide" data-k="del">⌫</button>
+  </div>
+  <div class="lock-error" id="lockError"></div>
+</div>
+
 <div class="sync-dot" id="syncDot"></div>
 <div class="app">
   <div class="topbar">
@@ -204,6 +240,46 @@
 
 <script>
 (function(){
+  // ---------- PIN lock ----------
+  const PIN = '1706';
+  const LOCK_KEY = 'essensplan_unlocked_v1';
+  const lockOverlay = document.getElementById('lockOverlay');
+  const lockDots = document.getElementById('lockDots').children;
+  const lockError = document.getElementById('lockError');
+  let entered = '';
+
+  function refreshDots(err){
+    for(let i=0;i<4;i++){
+      lockDots[i].className = 'lock-dot' + (i<entered.length ? (err?' err':' filled') : '');
+    }
+  }
+  function unlock(){
+    lockOverlay.style.display = 'none';
+    try{ localStorage.setItem(LOCK_KEY, '1'); }catch(e){}
+  }
+  document.getElementById('lockKeypad').addEventListener('click', e=>{
+    const btn = e.target.closest('.lock-key');
+    if(!btn) return;
+    const k = btn.getAttribute('data-k');
+    if(k==='del'){ entered = entered.slice(0,-1); lockError.textContent=''; refreshDots(false); return; }
+    if(entered.length>=4) return;
+    entered += k;
+    refreshDots(false);
+    if(entered.length===4){
+      setTimeout(()=>{
+        if(entered===PIN){ unlock(); }
+        else{
+          lockError.textContent = 'Falscher PIN';
+          refreshDots(true);
+          setTimeout(()=>{ entered=''; refreshDots(false); }, 400);
+        }
+      }, 120);
+    }
+  });
+  try{
+    if(localStorage.getItem(LOCK_KEY)==='1'){ lockOverlay.style.display='none'; }
+  }catch(e){}
+
   const BASE = 'https://einkaufsliste-die-suehsen-default-rtdb.europe-west1.firebasedatabase.app';
   const ROOT = 'essensplan';
 
